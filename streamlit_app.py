@@ -9,6 +9,7 @@ import streamlit as st
 from drag_p6 import __version__, __build__
 from drag_p6.calibrated import build_calibrated_network
 from drag_p6.drag import compute_drag, concentration_tables, target_catalog
+from drag_p6.dred_cost import DredCostScenario, evaluate_dred_cost
 from drag_p6.export import build_excel
 from drag_p6.sequential import compute_sequential_frontier
 from drag_p6.validation import build_validation, validation_summary
@@ -383,9 +384,114 @@ display["Switch Threshold"] = display.apply(threshold_text, axis=1)
 
 area_conc, location_conc = concentration_tables(results, hours_per_day)
 
-results_tab, frontier_tab, analytics_tab, recon_tab, validation_tab, method_tab, export_tab = st.tabs([
-    "DRAG Results", "Sequential Compression Frontier", "Decision Analytics", "Reconciliation", "Model Validation", "Method", "Export"
+results_tab, dred_tab, frontier_tab, analytics_tab, recon_tab, validation_tab, method_tab, export_tab = st.tabs([
+    "Critical Path DRAG", "DRED & DRAG Cost", "Sequential Compression Frontier", "Decision Analytics", "Reconciliation", "Model Validation", "Method", "Export"
 ])
+
+# ---------- DRED and DRAG Cost (logic-only, engineering-estimated DRED) ----------
+with dred_tab:
+    st.markdown("### DRED — Doubled Resource Estimated Duration")
+    st.caption(
+        "DRED is an independently estimated remaining duration after doubling resources. "
+        "The application does not assume twice the crew means half the duration, "
+        "and it does not dynamically re-level P6 resources."
+    )
+    if analysis_context["drag_mode"] != "LOGIC DRAG":
+        st.warning(
+            f"Analytical mode: {analysis_context['drag_mode']}. "
+            "This experiment is LOGIC ONLY and must not be interpreted as "
+            "resource-constrained schedule compression."
+        )
+
+    available = results[results["Remaining Duration (h)"] > 0].copy()
+    if available.empty:
+        st.info("No activities with positive remaining duration were found.")
+    else:
+        activity_items = [
+            (str(row["Task ID"]), str(row["Activity ID"]), str(row["Activity Name"]))
+            for _, row in available.iterrows()
+        ]
+        picked = st.selectbox(
+            "Activity to evaluate",
+            activity_items,
+            format_func=lambda x: f"{x[1]} — {x[2]}",
+            key="dred_activity",
+        )
+        task_id = picked[0]
+        duration_h = float(network.baseline_durations[task_id])
+        duration_d = duration_h / hours_per_day
+        st.metric("Current Remaining Duration", f"{duration_d:,.2f} display days")
+
+        with st.form("dred_economic_scenario"):
+            dred_days = st.number_input(
+                "Engineering-estimated DRED (display working days)",
+                min_value=0.0,
+                max_value=float(duration_d),
+                value=float(duration_d),
+                step=0.5,
+                help="Estimated remaining duration with doubled resources; not a prediction from P6 resource assignments.",
+            )
+            use_economics = st.checkbox(
+                "Include economic valuation (same currency for all inputs)", value=False
+            )
+            value_per_h = None
+            added_cost = None
+            if use_economics:
+                value_per_h = st.number_input(
+                    "Documented project value of earlier completion per working hour",
+                    min_value=0.0, value=0.0, step=100.0,
+                )
+                added_cost = st.number_input(
+                    "Incremental cost of resource intervention", min_value=0.0,
+                    value=0.0, step=100.0,
+                )
+                st.caption(
+                    "Only enable economics with an independently supported time value and "
+                    "incremental intervention cost. All amounts use the same currency."
+                )
+            submitted = st.form_submit_button("Evaluate DRED scenario", type="primary")
+
+        if submitted:
+            try:
+                scenario = DredCostScenario(
+                    task_id=task_id,
+                    dred_duration_h=float(dred_days) * hours_per_day,
+                    economic_value_per_hour=float(value_per_h) if use_economics else None,
+                    incremental_intervention_cost=float(added_cost) if use_economics else None,
+                )
+                output = evaluate_dred_cost(network, scenario, target_key=target_key)
+                st.session_state["dred_last_result"] = {
+                    "signature": (uploaded.name, len(uploaded.getvalue()), proj_id, target_key, task_id),
+                    "result": output,
+                }
+            except ValueError as exc:
+                st.error(str(exc))
+
+        payload = st.session_state.get("dred_last_result")
+        signature = (uploaded.name, len(uploaded.getvalue()), proj_id, target_key, task_id)
+        if payload and payload["signature"] == signature:
+            value = payload["result"]
+            z1, z2, z3 = st.columns(3)
+            z1.metric("Activity duration reduction", f"{value['duration_reduction_h']/hours_per_day:,.2f} d")
+            z2.metric("Target finish gain", f"{value['target_gain_h_signed']/hours_per_day:,.2f} d")
+            z3.metric(
+                "Compression transmission",
+                f"{value['target_gain_h_signed']/value['duration_reduction_h']:.3f}"
+                if value["duration_reduction_h"] else "N/A",
+            )
+            if value["gross_time_value"] is not None:
+                e1, e2 = st.columns(2)
+                e1.metric("Gross value of time recovered", f"{value['gross_time_value']:,.2f}")
+                e2.metric("Net economic value", f"{value['net_economic_value']:,.2f}")
+            else:
+                st.info("Economic result unavailable: provide justified economic inputs to enable valuation.")
+            st.caption(value["mode"] + " · " + value["assumptions"])
+            st.download_button(
+                "Download scenario (.csv)",
+                data=pd.DataFrame([value]).to_csv(index=False).encode("utf-8"),
+                file_name="DRAG_P6_DRED_Cost_Scenario.csv",
+                mime="text/csv",
+            )
 
 # ---------- DRAG Results ----------
 with results_tab:
