@@ -1,0 +1,17 @@
+ERMHDR	8.4	2026-08-24	Project	Admin	Primavera	PMDB	DRAG Demo
+%T	PROJECT
+%F	proj_id	proj_short_name	proj_name
+%R	1	DRAG_DEMO	DRAG Demo
+%T	TASK
+%F	task_id	proj_id	task_code	task_name	remain_drtn_hr_cnt	total_float_hr_cnt	status_code	clndr_id	task_type	cstr_type
+%R	1	1	A	Start Path	10	0	TK_NotStart	1	TT_Task	
+%R	2	1	B	Critical Branch	10	0	TK_NotStart	1	TT_Task	
+%R	3	1	C	Parallel Branch	7	3	TK_NotStart	1	TT_Task	
+%R	4	1	D	Finish Path	5	0	TK_NotStart	1	TT_Task	
+%T	TASKPRED
+%F	task_pred_id	task_id	pred_task_id	pred_type	lag_hr_cnt
+%R	1	2	1	PR_FS	0
+%R	2	3	1	PR_FS	0
+%R	3	4	2	PR_FS	0
+%R	4	4	3	PR_FS	0
+%E
